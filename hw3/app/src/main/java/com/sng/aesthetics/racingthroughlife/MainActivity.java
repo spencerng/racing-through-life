@@ -2,6 +2,7 @@ package com.sng.aesthetics.racingthroughlife;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -9,12 +10,13 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.media.AudioAttributes;
-import android.media.AudioManager;
+import android.icu.text.DecimalFormat;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
 import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.DocumentsContract;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
@@ -23,33 +25,43 @@ import android.widget.TextView;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.documentfile.provider.DocumentFile;
 
-import java.io.IOException;
+import org.apache.commons.math3.distribution.NormalDistribution;
+
 import java.util.ArrayList;
+import java.util.Collections;
 
 public class MainActivity extends AppCompatActivity implements SensorEventListener {
     private SensorManager sensorManager;
     private Sensor mAccelerometer, mGravity, mStep;
     private StepCounter stepCounter;
 
-    private int heightInches = 66;
+    // height of user in inches
+    private int HEIGHT_INCHES = 66;
+    private double strideLength;
+
+
+    private ArrayList<Uri> playlist;
+    private int playlistPosition;
 
     float[] gravity;
+    boolean mediaPlayerPrepared;
 
     private ArrayList<Double> pastAcc;
     private int REQUEST_CODE = 1;
     MediaProjectionManager mediaProjectionManager;
 
-    private TextView accDisplay;
-    private TextView stepDisplay;
-    private Button musicSelector;
+    private TextView accDisplay, songView, artistView,
+            avgStepView, curSpeedView, dailySpeedView, percentFasterView, albumView;
+    private Button musicSelector, playButton;
 
-    private MediaPlayer mediaPlayer;
+    private AudioPlayer audioPlayer;
     private MediaController mediaController;
+    private boolean playing;
 
     private boolean canRecordAudio() {
         return ContextCompat.checkSelfPermission(this,
@@ -63,56 +75,109 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 if (result.getResultCode() == Activity.RESULT_OK) {
                     Intent data = result.getData();
                     Uri file = data.getData();
-                    Log.i("uri", file.toString());
 
+                    playTrack(file);
 
-                    try {
-                        mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-                        mediaPlayer.setDataSource(getApplicationContext(), file);
-                        mediaPlayer.prepareAsync();
-
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
+                    buildPlaylist(file);
                 }
             });
 
+    private void buildPlaylist(Uri file) {
+
+  //      DocumentFile files = DocumentFile.fromTreeUri(getApplicationContext(), file);
+
+        playlist = new ArrayList<>();
+
+//        for (DocumentFile song : files.listFiles()) {
+//            Uri songUri = song.getUri();
+//            if (getApplicationContext().getContentResolver().getType(songUri).contains("audio")
+//                && !songUri.equals(file)) {
+//                playlist.add(songUri);
+//            }
+//        }
+
+        Collections.shuffle(playlist);
+        playlist.add(0, file);
+        playlistPosition = 0;
+    }
+
+    private void playTrack(Uri file) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        retriever.setDataSource(getApplicationContext(), file);
+
+        songView.setText(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE));
+        artistView.setText(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST));
+        albumView.setText(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM));
+
+        playButton.setBackground(getDrawable(R.drawable.ic_baseline_pause_circle_filled_24));
+
+        mediaPlayerPrepared = true;
+        audioPlayer.setTrack(file);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        playlist = new ArrayList<>();
+        playlistPosition = 0;
+
         gravity = new float[3];
         pastAcc = new ArrayList<>();
-        stepCounter = new StepCounter();
+        stepCounter = new StepCounter(15);
 
         sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
         mAccelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         mGravity = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY);
         mStep = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR);
 
+        strideLength = HEIGHT_INCHES * 0.415;
+
         // accDisplay = findViewById(R.id.accel_display);
-        stepDisplay = findViewById(R.id.step_display);
+
         musicSelector = findViewById(R.id.musicSelector);
-        mediaController = findViewById(R.id.musicPlayer);
+        songView = findViewById(R.id.songTitle);
+        artistView = findViewById(R.id.artist);
+        curSpeedView = findViewById(R.id.speedView);
+        avgStepView = findViewById(R.id.stepView);
+        dailySpeedView = findViewById(R.id.dailyAvgSpeedView);
+        percentFasterView = findViewById(R.id.percentFasterView);
+        albumView = findViewById(R.id.album);
+        playButton = findViewById(R.id.playButton);
 
-        mediaPlayer = new MediaPlayer();
-        mediaPlayer.setAudioAttributes(
-                new AudioAttributes.Builder()
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .build()
-        );
+        // mediaController = findViewById(R.id.musicPlayer);
 
-        mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+        playButton.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void onPrepared(MediaPlayer mediaPlayer) {
-                mediaPlayer.start();
+            public void onClick(View view) {
+                if (mediaPlayerPrepared && !audioPlayer.isPlaying()) {
+                    playButton.setBackground(getDrawable(R.drawable.ic_baseline_pause_circle_filled_24));
+                    audioPlayer.start();
+                } else {
+                    playButton.setBackground(getDrawable(R.drawable.ic_baseline_play_circle_filled_24));
+                    audioPlayer.pause();
+                }
 
             }
         });
 
+        audioPlayer = new AudioPlayer(getApplicationContext());
+        mediaPlayerPrepared = false;
+
+        audioPlayer.getMediaPlayer().setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+            @Override
+            public void onCompletion(MediaPlayer mediaPlayer) {
+                playButton.setBackground(getDrawable(R.drawable.ic_baseline_play_circle_filled_24));
+                audioPlayer.pause();
+                mediaPlayerPrepared = false;
+                artistView.setText("");
+                albumView.setText("");
+                songView.setText("Select a song to begin.");
+                playlist = new ArrayList<>();
+                playlistPosition = 0;
+            }
+        });
 
 
         musicSelector.setOnClickListener(new View.OnClickListener() {
@@ -121,7 +186,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 Intent chooseFile = new Intent(Intent.ACTION_GET_CONTENT);
                 chooseFile.setType("audio/*");
                 chooseFile = Intent.createChooser(chooseFile, "Select a music file");
-
 
                 activityResultLauncher.launch(chooseFile);
 
@@ -144,9 +208,54 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 REQUEST_CODE
         );
 
+        Button backButton, skipButton;
+
+        backButton = findViewById(R.id.backButton);
+        skipButton = findViewById(R.id.nextButton);
+
+        backButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if (playlistPosition >= 1) {
+                    playlistPosition -= 1;
+                    playTrack(playlist.get(playlistPosition));
+                }
+
+                if (playlistPosition < playlist.size() - 1) {
+                    playlistPosition += 1;
+                    playTrack(playlist.get(playlistPosition));
+                }
+            }
+        });
+
     }
 
-    public void onSensorChanged(SensorEvent event){
+    public void updateStatDisplay() {
+
+        stepCounter.cleanup();
+
+        // cur avg steps, speed, social ranking, avg walking speed per day
+        double avgStepsPerSec = stepCounter.getRollingAvgSteps();
+        double feetPerSecond = strideLength / 12 * avgStepsPerSec;
+
+        double cumAvgFeetPerSecond = strideLength / 12 * stepCounter.getCumulativeAvgStepsPerSec();
+
+        DecimalFormat df = new DecimalFormat("#.#");
+        avgStepView.setText(df.format(Math.round(avgStepsPerSec * 60)));
+        curSpeedView.setText(df.format(feetPerSecond));
+        // mean 4.4, 0.62 SD
+
+        NormalDistribution dist = new NormalDistribution(4.4, 0.62);
+        double percentFaster = Math.round(100 * dist.cumulativeProbability(cumAvgFeetPerSecond));
+
+        dailySpeedView.setText(df.format(cumAvgFeetPerSecond / 5280 * 60 * 60));
+        percentFasterView.setText((int) percentFaster + "%");
+
+        audioPlayer.setPlaybackSpeed(feetPerSecond);
+
+    }
+
+    public void onSensorChanged(SensorEvent event) {
         // In this example, alpha is calculated as t / (t + dT),
         // where t is the low-pass filter's time-constant and
         // dT is the event delivery rate.
@@ -156,55 +265,15 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             gravity[1] = event.values[1];
             gravity[2] = event.values[2];
 
-        } else if (sensorType == Sensor.TYPE_ACCELEROMETER){
-            double[] linearAcc = new double[3];
+        } else if (sensorType == Sensor.TYPE_ACCELEROMETER) {
 
-            // Remove the gravity contribution with the high-pass filter.
-            linearAcc[0] = event.values[0] - gravity[0];
-            linearAcc[1] = event.values[1] - gravity[1];
-            linearAcc[2] = event.values[2] - gravity[2];
-
-            double sumSquares = 0.0;
-
-            for (int i = 0; i < linearAcc.length; i++) {
-                sumSquares += Math.pow(linearAcc[i], 2);
-            }
-            double netAcc = Math.sqrt(sumSquares);
-
-            if (pastAcc.size() > 10) {
-                pastAcc.remove(0);
-            }
-
-            pastAcc.add(netAcc);
-
-            double avgAcc = pastAcc.stream().mapToDouble(d -> d).average().orElse(0.0);
-
-//            String displayText = "X: " + linearAcc[0] + "\nY: " + linearAcc[1] + "\nZ: " +
-//                    linearAcc[2] + "\nAvg net: " + pastAcc;
-//            accDisplay.setText(displayText);
         } else if (sensorType == Sensor.TYPE_STEP_DETECTOR) {
             stepCounter.increment();
 
         }
+        updateStatDisplay();
 
-        double avgSteps = stepCounter.getRollingAvgSteps();
-        double feetPerSecond = heightInches * 0.415 / 12 / 60 * avgSteps;
-        String displayText = "Total Steps: " + stepCounter.getTotalSteps()
-                + "\nAvg. Steps:" + avgSteps
-                + "\nAvg. Speed:" + feetPerSecond + " ft/s";
-
-        setPlaybackSpeed(feetPerSecond);
-
-        stepDisplay.setText(displayText);
     }
-
-    private void setPlaybackSpeed(double feetPerSecond) {
-        if (mediaPlayer.isPlaying()) {
-            double speed = 3.0 / (1 + Math.pow(Math.E, -0.25 * (feetPerSecond - 6)));
-            mediaPlayer.setPlaybackParams(mediaPlayer.getPlaybackParams().setSpeed((float) speed));
-        }
-    }
-
 
     @Override
     public final void onAccuracyChanged(Sensor sensor, int accuracy) {
