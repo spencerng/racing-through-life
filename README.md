@@ -4,4 +4,6 @@ Prototype Android music player that speeds up your music based on how fast you'r
 
 <img src="./screenshot.png" width="200">
 
+Created for CMSC 23218: Surveillance Aesthetics at the University of Chicago (Fall 2021)
+
 
